@@ -1,3 +1,4 @@
+
 if _G.MTC and _G.MTC.stop then pcall(_G.MTC.stop) end
 
 local RS        = game:GetService("RunService")
@@ -55,7 +56,16 @@ local Config = {
 
     ModOutline = false, ModFilled = false, ModEngine = true, ModAmmo = true, ModMaxDist = 400,
 
-    HideGrain = false, Missile = false, AutoReload = false, ModChecker = false,
+    HideGrain = false, Missile = false, AutoReload = false, ModChecker = false, NoGrass = false,
+    NoArmor = false,
+
+    KDEnabled = false,
+}
+
+local Keys = {
+    NoArmor  = nil,
+    KDStart  = nil,
+    KDStop   = nil,
 }
 
 local BoxEdges = {
@@ -320,6 +330,91 @@ local function restoreGrain()
     grainAddrs = {}
 end
 
+local GRASS_TINY = Vector3_new(0.01, 0.01, 0.01)
+local grassParts = {}
+local grassOrig  = {}
+local function foliageRoot()
+    local m = Workspace:FindFirstChild("Map"); m = m and m:FindFirstChild("MapParts")
+    m = m and m:FindFirstChild("mapstuff"); return m and m:FindFirstChild("MiscFoliage")
+end
+local function applyNoGrass()
+    local mf = foliageRoot(); if not mf then return end
+    grassParts = {}
+    for _, d in ipairs(mf:GetDescendants()) do
+        local cn = d.ClassName
+        if cn == "MeshPart" or cn == "Part" or cn == "UnionOperation" then
+            local a = d.Address
+            if a then
+                if grassOrig[a] == nil then grassOrig[a] = d.Size end
+                grassParts[#grassParts + 1] = d
+                pcall(function() d.Size = GRASS_TINY end)
+            end
+        end
+    end
+end
+local function restoreNoGrass()
+    for i = 1, #grassParts do
+        local d = grassParts[i]
+        local a = d.Address
+        local o = a and grassOrig[a]
+        if o then pcall(function() d.Size = o end) end
+    end
+    grassParts = {}; grassOrig = {}
+end
+
+local armorCache = {}
+local armorOrig  = {}
+local function cacheVehicleArmor(veh, addr)
+    local list = {}
+    for _, d in ipairs(veh:GetDescendants()) do
+        if d.Name == "ArmourValue" and d.ClassName == "NumberValue" then
+            list[#list + 1] = d
+            local a = d.Address
+            if a and armorOrig[a] == nil then armorOrig[a] = d.Value end
+        end
+    end
+    armorCache[addr] = list
+end
+local function enforceNoArmor()
+    local sv = Workspace:FindFirstChild("SpawnedVehicles")
+    if not sv then return end
+    local seen = {}
+    for _, veh in ipairs(sv:GetChildren()) do
+        local addr = veh.Address
+        if addr then
+            seen[addr] = true
+            local list = armorCache[addr]
+            if not list then cacheVehicleArmor(veh, addr); list = armorCache[addr] end
+            for i = 1, #list do
+                local d = list[i]
+                if d.Value ~= 0 then pcall(function() d.Value = 0 end) end
+            end
+        end
+    end
+    for a in pairs(armorCache) do if not seen[a] then armorCache[a] = nil end end
+end
+local function restoreNoArmor()
+    for _, list in pairs(armorCache) do
+        for i = 1, #list do
+            local d = list[i]; local a = d.Address; local o = a and armorOrig[a]
+            if o then pcall(function() d.Value = o end) end
+        end
+    end
+    armorCache = {}; armorOrig = {}
+end
+
+local KD_VOID_Y = -8000
+local kdActive  = false
+local function kdHoldVoid()
+    local ch = LP and LP.Character
+    local hrp = ch and ch:FindFirstChild("HumanoidRootPart")
+    local hum = ch and ch:FindFirstChild("Humanoid")
+    if hrp and hum and hum.Health and hum.Health > 0 then
+        local p = hrp.Position
+        if p then pcall(function() hrp.CFrame = CFrame.new(p.X, KD_VOID_Y, p.Z) end) end
+    end
+end
+
 local PROJ = {}
 do
     local function P(label, threat, names)
@@ -503,6 +598,39 @@ task.spawn(function()
     end
 end)
 
+task.spawn(function()
+    while running do
+        if Config.NoArmor then enforceNoArmor() end
+        task.wait(0.35)
+    end
+end)
+
+local UIS = game:GetService("UserInputService")
+local bindingSlot = nil
+local function armBind(slot) bindingSlot = slot; pcall(notify, "MTC", "press a key to bind: " .. slot, 3) end
+local inputConn = UIS.InputBegan:Connect(function(inp)
+    local kc = inp and inp.KeyCode
+    if not kc then return end
+    if bindingSlot then
+        Keys[bindingSlot] = kc
+        local s = bindingSlot; bindingSlot = nil
+        pcall(function() UI.SetValue("bind_" .. s, false) end)
+        pcall(notify, "MTC", s .. " bound (key " .. tostring(kc) .. ")", 3)
+        return
+    end
+    if Keys.NoArmor and kc == Keys.NoArmor then
+        Config.NoArmor = not Config.NoArmor
+        if not Config.NoArmor then restoreNoArmor() end
+        pcall(notify, "MTC", "No Armor " .. (Config.NoArmor and "ON" or "OFF"), 2)
+    end
+    if Keys.KDStart and kc == Keys.KDStart and Config.KDEnabled then
+        kdActive = true; pcall(notify, "KD Dropper", "DROPPING", 2)
+    end
+    if Keys.KDStop and kc == Keys.KDStop then
+        kdActive = false; pcall(notify, "KD Dropper", "stopped", 2)
+    end
+end)
+
 local fps = 60
 local PTS, FRONT   = {}, {}
 local MPTS, MFRONT = {}, {}
@@ -579,6 +707,8 @@ end
 local conn = RS.RenderStepped:Connect(function(dt)
     if not running then return end
     if dt and dt > 0 then fps = fps * 0.9 + (1 / dt) * 0.1 end
+
+    if kdActive then kdHoldVoid() end
 
     if Config.AutoReload and crewLoadBar then
         local needle, win
@@ -904,6 +1034,29 @@ local uiOk, uiErr = pcall(function()
         try(function() xsec:Toggle("misc_missile", "Missile ESP", Config.Missile, function(v) Config.Missile = v end) end)
         try(function() xsec:Toggle("misc_autoreload", "Auto Fast Reload", Config.AutoReload, function(v) Config.AutoReload = v end) end)
         try(function() xsec:Toggle("misc_modcheck", "Mod Checker", Config.ModChecker, function(v) Config.ModChecker = v end) end)
+        try(function() xsec:Toggle("misc_nograss", "No Grass", Config.NoGrass, function(v)
+            Config.NoGrass = v
+            if v then applyNoGrass() else restoreNoGrass() end
+        end) end)
+        try(function() xsec:Toggle("misc_noarmor", "No Armor", Config.NoArmor, function(v)
+            Config.NoArmor = v
+            if not v then restoreNoArmor() end
+        end) end)
+        try(function() xsec:Toggle("bind_NoArmor", "  Set No Armor Key", false, function(v)
+            if v then armBind("NoArmor") else bindingSlot = nil end
+        end) end)
+
+        local ksec = tab:Section("KD Dropper", "Right")
+        try(function() ksec:Toggle("kd_enabled", "KD Dropper", Config.KDEnabled, function(v)
+            Config.KDEnabled = v
+            if not v then kdActive = false end
+        end) end)
+        try(function() ksec:Toggle("bind_KDStart", "Set Start Key", false, function(v)
+            if v then armBind("KDStart") else bindingSlot = nil end
+        end) end)
+        try(function() ksec:Toggle("bind_KDStop", "Set Stop Key", false, function(v)
+            if v then armBind("KDStop") else bindingSlot = nil end
+        end) end)
     end)
 end)
 if not uiOk then pcall(notify, "MTC", "UI failed: " .. tostring(uiErr), 8) end
@@ -911,7 +1064,11 @@ if not uiOk then pcall(notify, "MTC", "UI failed: " .. tostring(uiErr), 8) end
 _G.MTC = {
     stop = function()
         running = false
+        kdActive = false
         if Config.HideGrain then pcall(restoreGrain) end
+        if Config.NoGrass then pcall(restoreNoGrass) end
+        if Config.NoArmor then pcall(restoreNoArmor) end
+        pcall(function() inputConn:Disconnect() end)
         pcall(function() conn:Disconnect() end)
         for i = 1, POOL do
             local s = slots[i]
@@ -939,4 +1096,3 @@ _G.MTC = {
 
 pcall(notify, "MTC", "Vehicle ESP + Module ESP loaded", 4)
 print("[MTC] loaded, uiOk=", uiOk)
-
