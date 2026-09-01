@@ -56,16 +56,7 @@ local Config = {
 
     ModOutline = false, ModFilled = false, ModEngine = true, ModAmmo = true, ModMaxDist = 400,
 
-    HideGrain = false, Missile = false, AutoReload = false, ModChecker = false, NoGrass = false,
-    NoArmor = false,
-
-    KDEnabled = false,
-}
-
-local Keys = {
-    NoArmor  = nil,
-    KDStart  = nil,
-    KDStop   = nil,
+    HideGrain = false, Missile = false, AutoReload = false, ModChecker = false,
 }
 
 local BoxEdges = {
@@ -330,91 +321,6 @@ local function restoreGrain()
     grainAddrs = {}
 end
 
-local GRASS_TINY = Vector3_new(0.01, 0.01, 0.01)
-local grassParts = {}
-local grassOrig  = {}
-local function foliageRoot()
-    local m = Workspace:FindFirstChild("Map"); m = m and m:FindFirstChild("MapParts")
-    m = m and m:FindFirstChild("mapstuff"); return m and m:FindFirstChild("MiscFoliage")
-end
-local function applyNoGrass()
-    local mf = foliageRoot(); if not mf then return end
-    grassParts = {}
-    for _, d in ipairs(mf:GetDescendants()) do
-        local cn = d.ClassName
-        if cn == "MeshPart" or cn == "Part" or cn == "UnionOperation" then
-            local a = d.Address
-            if a then
-                if grassOrig[a] == nil then grassOrig[a] = d.Size end
-                grassParts[#grassParts + 1] = d
-                pcall(function() d.Size = GRASS_TINY end)
-            end
-        end
-    end
-end
-local function restoreNoGrass()
-    for i = 1, #grassParts do
-        local d = grassParts[i]
-        local a = d.Address
-        local o = a and grassOrig[a]
-        if o then pcall(function() d.Size = o end) end
-    end
-    grassParts = {}; grassOrig = {}
-end
-
-local armorCache = {}
-local armorOrig  = {}
-local function cacheVehicleArmor(veh, addr)
-    local list = {}
-    for _, d in ipairs(veh:GetDescendants()) do
-        if d.Name == "ArmourValue" and d.ClassName == "NumberValue" then
-            list[#list + 1] = d
-            local a = d.Address
-            if a and armorOrig[a] == nil then armorOrig[a] = d.Value end
-        end
-    end
-    armorCache[addr] = list
-end
-local function enforceNoArmor()
-    local sv = Workspace:FindFirstChild("SpawnedVehicles")
-    if not sv then return end
-    local seen = {}
-    for _, veh in ipairs(sv:GetChildren()) do
-        local addr = veh.Address
-        if addr then
-            seen[addr] = true
-            local list = armorCache[addr]
-            if not list then cacheVehicleArmor(veh, addr); list = armorCache[addr] end
-            for i = 1, #list do
-                local d = list[i]
-                if d.Value ~= 0 then pcall(function() d.Value = 0 end) end
-            end
-        end
-    end
-    for a in pairs(armorCache) do if not seen[a] then armorCache[a] = nil end end
-end
-local function restoreNoArmor()
-    for _, list in pairs(armorCache) do
-        for i = 1, #list do
-            local d = list[i]; local a = d.Address; local o = a and armorOrig[a]
-            if o then pcall(function() d.Value = o end) end
-        end
-    end
-    armorCache = {}; armorOrig = {}
-end
-
-local KD_VOID_Y = -8000
-local kdActive  = false
-local function kdHoldVoid()
-    local ch = LP and LP.Character
-    local hrp = ch and ch:FindFirstChild("HumanoidRootPart")
-    local hum = ch and ch:FindFirstChild("Humanoid")
-    if hrp and hum and hum.Health and hum.Health > 0 then
-        local p = hrp.Position
-        if p then pcall(function() hrp.CFrame = CFrame.new(p.X, KD_VOID_Y, p.Z) end) end
-    end
-end
-
 local PROJ = {}
 do
     local function P(label, threat, names)
@@ -598,39 +504,6 @@ task.spawn(function()
     end
 end)
 
-task.spawn(function()
-    while running do
-        if Config.NoArmor then enforceNoArmor() end
-        task.wait(0.35)
-    end
-end)
-
-local UIS = game:GetService("UserInputService")
-local bindingSlot = nil
-local function armBind(slot) bindingSlot = slot; pcall(notify, "MTC", "press a key to bind: " .. slot, 3) end
-local inputConn = UIS.InputBegan:Connect(function(inp)
-    local kc = inp and inp.KeyCode
-    if not kc then return end
-    if bindingSlot then
-        Keys[bindingSlot] = kc
-        local s = bindingSlot; bindingSlot = nil
-        pcall(function() UI.SetValue("bind_" .. s, false) end)
-        pcall(notify, "MTC", s .. " bound (key " .. tostring(kc) .. ")", 3)
-        return
-    end
-    if Keys.NoArmor and kc == Keys.NoArmor then
-        Config.NoArmor = not Config.NoArmor
-        if not Config.NoArmor then restoreNoArmor() end
-        pcall(notify, "MTC", "No Armor " .. (Config.NoArmor and "ON" or "OFF"), 2)
-    end
-    if Keys.KDStart and kc == Keys.KDStart and Config.KDEnabled then
-        kdActive = true; pcall(notify, "KD Dropper", "DROPPING", 2)
-    end
-    if Keys.KDStop and kc == Keys.KDStop then
-        kdActive = false; pcall(notify, "KD Dropper", "stopped", 2)
-    end
-end)
-
 local fps = 60
 local PTS, FRONT   = {}, {}
 local MPTS, MFRONT = {}, {}
@@ -708,8 +581,6 @@ local conn = RS.RenderStepped:Connect(function(dt)
     if not running then return end
     if dt and dt > 0 then fps = fps * 0.9 + (1 / dt) * 0.1 end
 
-    if kdActive then kdHoldVoid() end
-
     if Config.AutoReload and crewLoadBar then
         local needle, win
         for _, d in ipairs(crewLoadBar:GetDescendants()) do
@@ -770,6 +641,11 @@ local conn = RS.RenderStepped:Connect(function(dt)
     local engCol, engA = readCP("mod_engine_col", COL_ENGINE, MOD_FILL_A)
     local ammoCol, ammoA = readCP("mod_ammo_col", COL_AMMO, MOD_FILL_A)
 
+    local boxCol, boxA     = readCP("mtc_box_col",   COL_BOX,   1)
+    local nameCol, nameA   = readCP("mtc_name_col",  COL_NAME,  1)
+    local classCol, classA = readCP("mtc_class_col", COL_CLASS, 1)
+    local distCol, distA   = readCP("mtc_dist_col",  COL_DIST,  1)
+
     local detected = #list
     local drawn, modDrawn = 0, 0
     local nearName, nearM = nil, huge
@@ -818,8 +694,8 @@ local conn = RS.RenderStepped:Connect(function(dt)
                                 local s = slots[drawn]
                                 for j = 1, 12 do s.lines[j].Visible = false end
                                 s.marker.Position = Vector2_new(x, y); s.marker.Radius = fsize * 0.5
-                                s.marker.Color = isDrone and COL_DRONE or COL_BOX
-                                s.marker.Transparency = alpha; s.marker.Visible = isDrone or showBox
+                                s.marker.Color = isDrone and COL_DRONE or boxCol
+                                s.marker.Transparency = isDrone and alpha or (alpha * boxA); s.marker.Visible = isDrone or showBox
                                 s.cls.Visible = false
                                 local yy = y - floor(fsize * 0.5) - 4 - fsize
                                 if isDrone then
@@ -829,12 +705,12 @@ local conn = RS.RenderStepped:Connect(function(dt)
                                     s.name.Transparency = alpha; s.name.Position = Vector2_new(x, yy); s.name.Visible = true
                                 else
                                     if showDist and dm then
-                                        s.dist.Size = fsize; s.dist.Text = dm .. "m"; s.dist.Color = COL_DIST
-                                        s.dist.Transparency = alpha; s.dist.Position = Vector2_new(x, yy); s.dist.Visible = true; yy = yy - step
+                                        s.dist.Size = fsize; s.dist.Text = dm .. "m"; s.dist.Color = distCol
+                                        s.dist.Transparency = alpha * distA; s.dist.Position = Vector2_new(x, yy); s.dist.Visible = true; yy = yy - step
                                     else s.dist.Visible = false end
                                     if showName then
-                                        s.name.Size = fsize; s.name.Text = t.name; s.name.Color = COL_NAME
-                                        s.name.Transparency = alpha; s.name.Position = Vector2_new(x, yy); s.name.Visible = true
+                                        s.name.Size = fsize; s.name.Text = t.name; s.name.Color = nameCol
+                                        s.name.Transparency = alpha * nameA; s.name.Position = Vector2_new(x, yy); s.name.Visible = true
                                     else s.name.Visible = false end
                                 end
                             end
@@ -846,23 +722,23 @@ local conn = RS.RenderStepped:Connect(function(dt)
                             local s = slots[drawn]
                             s.marker.Visible = false
 
-                            if showBox then drawEdges(s.lines, PTS, FRONT, COL_BOX, alpha)
+                            if showBox then drawEdges(s.lines, PTS, FRONT, boxCol, alpha * boxA)
                             else for j = 1, 12 do s.lines[j].Visible = false end end
 
                             local cx = floor((minX + maxX) / 2)
                             local yy = minY - 4 - fsize
 
                             if showDist and dm then
-                                s.dist.Size = fsize; s.dist.Text = dm .. "m"; s.dist.Color = COL_DIST
-                                s.dist.Transparency = alpha; s.dist.Position = Vector2_new(cx, yy); s.dist.Visible = true; yy = yy - step
+                                s.dist.Size = fsize; s.dist.Text = dm .. "m"; s.dist.Color = distCol
+                                s.dist.Transparency = alpha * distA; s.dist.Position = Vector2_new(cx, yy); s.dist.Visible = true; yy = yy - step
                             else s.dist.Visible = false end
                             if showName then
-                                s.name.Size = fsize; s.name.Text = t.name; s.name.Color = COL_NAME
-                                s.name.Transparency = alpha; s.name.Position = Vector2_new(cx, yy); s.name.Visible = true; yy = yy - step
+                                s.name.Size = fsize; s.name.Text = t.name; s.name.Color = nameCol
+                                s.name.Transparency = alpha * nameA; s.name.Position = Vector2_new(cx, yy); s.name.Visible = true; yy = yy - step
                             else s.name.Visible = false end
                             if showClass and t.class then
-                                s.cls.Size = fsize; s.cls.Text = t.class; s.cls.Color = COL_CLASS
-                                s.cls.Transparency = alpha; s.cls.Position = Vector2_new(cx, yy); s.cls.Visible = true
+                                s.cls.Size = fsize; s.cls.Text = t.class; s.cls.Color = classCol
+                                s.cls.Transparency = alpha * classA; s.cls.Position = Vector2_new(cx, yy); s.cls.Visible = true
                             else s.cls.Visible = false end
 
                             if modOn and dm and dm <= modMax then
@@ -979,10 +855,12 @@ local conn = RS.RenderStepped:Connect(function(dt)
         for i = 1, STAFFPOOL do staffLines[i].Visible = false end
     end
 
-    if Config.ModChecker and staffPopupText and tick() < staffPopupUntil then
+    if Config.ModChecker and #modTargets > 0 then
         local cam = Workspace.CurrentCamera
         local vp = (cam and cam.ViewportSize) or Vector2_new(1920, 1080)
-        staffPopup.Text = staffPopupText; staffPopup.Position = Vector2_new(vp.X * 0.5, vp.Y * 0.18); staffPopup.Visible = true
+        local n = #modTargets
+        staffPopup.Text = "!!  " .. (n > 1 and (n .. " STAFF") or modTargets[1].role:upper()) .. " IN THE SERVER  !!"
+        staffPopup.Position = Vector2_new(vp.X * 0.5, vp.Y * 0.12); staffPopup.Visible = true
     else
         staffPopup.Visible = false
     end
@@ -1004,10 +882,15 @@ local uiOk, uiErr = pcall(function()
     UI.AddTab("MTC", function(tab)
         local sec = tab:Section("Tank ESP", "Left")
         try(function() sec:Toggle("mtc_enabled", "Tank ESP", Config.Enabled, function(v) Config.Enabled = v end) end)
+
         try(function() sec:Toggle("mtc_box", "Box ESP", Config.Box, function(v) Config.Box = v end) end)
+        try(function() sec:ColorPicker("mtc_box_col", 255, 255, 255, 255, NOOP) end)
         try(function() sec:Toggle("mtc_names", "Names", Config.Names, function(v) Config.Names = v end) end)
+        try(function() sec:ColorPicker("mtc_name_col", 255, 255, 255, 255, NOOP) end)
         try(function() sec:Toggle("mtc_class", "Vehicle Class", Config.Class, function(v) Config.Class = v end) end)
+        try(function() sec:ColorPicker("mtc_class_col", 255, 180, 80, 255, NOOP) end)
         try(function() sec:Toggle("mtc_dist", "Distance", Config.Distance, function(v) Config.Distance = v end) end)
+        try(function() sec:ColorPicker("mtc_dist_col", 140, 220, 255, 255, NOOP) end)
         try(function() sec:Toggle("mtc_fade", "Distance Fade", Config.Fade, function(v) Config.Fade = v end) end)
         try(function() sec:Toggle("mtc_heli", "Helicopter ESP", Config.Heli, function(v) Config.Heli = v end) end)
         try(function() sec:Toggle("mtc_occ", "Occupied Only", Config.OccupiedOnly, function(v) Config.OccupiedOnly = v end) end)
@@ -1034,29 +917,6 @@ local uiOk, uiErr = pcall(function()
         try(function() xsec:Toggle("misc_missile", "Missile ESP", Config.Missile, function(v) Config.Missile = v end) end)
         try(function() xsec:Toggle("misc_autoreload", "Auto Fast Reload", Config.AutoReload, function(v) Config.AutoReload = v end) end)
         try(function() xsec:Toggle("misc_modcheck", "Mod Checker", Config.ModChecker, function(v) Config.ModChecker = v end) end)
-        try(function() xsec:Toggle("misc_nograss", "No Grass", Config.NoGrass, function(v)
-            Config.NoGrass = v
-            if v then applyNoGrass() else restoreNoGrass() end
-        end) end)
-        try(function() xsec:Toggle("misc_noarmor", "No Armor", Config.NoArmor, function(v)
-            Config.NoArmor = v
-            if not v then restoreNoArmor() end
-        end) end)
-        try(function() xsec:Toggle("bind_NoArmor", "  Set No Armor Key", false, function(v)
-            if v then armBind("NoArmor") else bindingSlot = nil end
-        end) end)
-
-        local ksec = tab:Section("KD Dropper", "Right")
-        try(function() ksec:Toggle("kd_enabled", "KD Dropper", Config.KDEnabled, function(v)
-            Config.KDEnabled = v
-            if not v then kdActive = false end
-        end) end)
-        try(function() ksec:Toggle("bind_KDStart", "Set Start Key", false, function(v)
-            if v then armBind("KDStart") else bindingSlot = nil end
-        end) end)
-        try(function() ksec:Toggle("bind_KDStop", "Set Stop Key", false, function(v)
-            if v then armBind("KDStop") else bindingSlot = nil end
-        end) end)
     end)
 end)
 if not uiOk then pcall(notify, "MTC", "UI failed: " .. tostring(uiErr), 8) end
@@ -1064,11 +924,7 @@ if not uiOk then pcall(notify, "MTC", "UI failed: " .. tostring(uiErr), 8) end
 _G.MTC = {
     stop = function()
         running = false
-        kdActive = false
         if Config.HideGrain then pcall(restoreGrain) end
-        if Config.NoGrass then pcall(restoreNoGrass) end
-        if Config.NoArmor then pcall(restoreNoArmor) end
-        pcall(function() inputConn:Disconnect() end)
         pcall(function() conn:Disconnect() end)
         for i = 1, POOL do
             local s = slots[i]
