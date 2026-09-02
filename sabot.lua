@@ -155,10 +155,12 @@ for i = 1, 5 do
     ovrLines[i] = t
 end
 
+local ballRay = Drawing.new("Line")
+ballRay.Thickness = 1.5; ballRay.Color = COL_BALL; ballRay.Transparency = 1; ballRay.Visible = false
 local ballMarker = Drawing.new("Circle")
-ballMarker.Thickness = 1.5; ballMarker.NumSides = 16; ballMarker.Filled = false; ballMarker.Color = COL_BALL; ballMarker.Visible = false
+ballMarker.Thickness = 2; ballMarker.NumSides = 18; ballMarker.Filled = false; ballMarker.Color = COL_BALL; ballMarker.Visible = false
 local ballDot = Drawing.new("Circle")
-ballDot.Thickness = 1; ballDot.NumSides = 10; ballDot.Filled = true; ballDot.Color = COL_BALL; ballDot.Visible = false
+ballDot.Thickness = 1; ballDot.NumSides = 18; ballDot.Filled = true; ballDot.Color = COL_BALL; ballDot.Visible = false
 local ballBg = Drawing.new("Square")
 ballBg.Filled = true; ballBg.Rounding = 0; ballBg.Color = Color3_rgb(8, 14, 11); ballBg.Transparency = 0.5; ballBg.Visible = false
 local ballTitle = Drawing.new("Text")
@@ -569,6 +571,10 @@ task.spawn(function()
             if bcf then
                 local o = bcf.Position
                 local dir = bcf.LookVector
+
+                local cc = Workspace.CurrentCamera
+                local camLook = cc and cc.CFrame.LookVector
+                if camLook and dir:Dot(camLook) < 0 then dir = -dir end
                 local vehA = veh.Address
                 local prm = RaycastParams.new(); prm.FilterType = Enum.RaycastFilterType.Exclude
                 prm.FilterDescendantsInstances = { ch, veh }
@@ -584,13 +590,14 @@ task.spawn(function()
                     local studs = (hit.Position - o).Magnitude
                     local flightT = studs / SHELL_VEL.default
                     ballResult = {
-                        distM  = studs * STUDS_TO_M,
-                        hitPos = hit.Position,
+                        distM   = studs * STUDS_TO_M,
+                        hitPos  = hit.Position,
+                        originPos = o,
                         flightT = flightT,
-                        dropM  = (0.5 * GRAV * flightT * flightT) * STUDS_TO_M,
+                        dropM   = (0.5 * GRAV * flightT * flightT) * STUDS_TO_M,
                     }
                 else
-                    ballResult = { distM = nil }
+                    ballResult = { distM = nil, originPos = o, tipPos = o + dir * 300 }
                 end
             else
                 ballResult = nil
@@ -722,28 +729,38 @@ local conn = RS.RenderStepped:Connect(function(dt)
         local px, py = 12, vpy - 96
         ballBg.Position = Vector2_new(px, py); ballBg.Size = Vector2_new(170, 82); ballBg.Visible = true
         ballTitle.Text = "BALLISTIC"; ballTitle.Position = Vector2_new(px + 10, py + 6); ballTitle.Visible = true
+
+        local sO, visO = WTS(ballResult.originPos)
         if ballResult.distM then
-            local sp, vis = WTS(ballResult.hitPos)
-            if vis and sp then
-                local x, y = floor(sp.X + 0.5), floor(sp.Y + 0.5)
-                ballMarker.Position = Vector2_new(x, y); ballMarker.Radius = 7; ballMarker.Visible = true
-                ballDot.Position = Vector2_new(x, y); ballDot.Radius = 1.5; ballDot.Visible = true
+            local sH, visH = WTS(ballResult.hitPos)
+            if visH and sH then
+                local x, y = floor(sH.X + 0.5), floor(sH.Y + 0.5)
+                ballDot.Position = Vector2_new(x, y); ballDot.Radius = 5; ballDot.Visible = true
+                ballMarker.Position = Vector2_new(x, y); ballMarker.Radius = 9; ballMarker.Visible = true
                 ballRange.Text = string.format("%.0f m", ballResult.distM)
-                ballRange.Position = Vector2_new(x, y + 12); ballRange.Visible = true
+                ballRange.Position = Vector2_new(x, y + 16); ballRange.Visible = true
+                if visO and sO then
+                    ballRay.From = Vector2_new(floor(sO.X + 0.5), floor(sO.Y + 0.5)); ballRay.To = Vector2_new(x, y); ballRay.Visible = true
+                else ballRay.Visible = false end
             else
-                ballMarker.Visible = false; ballDot.Visible = false; ballRange.Visible = false
+                ballDot.Visible = false; ballMarker.Visible = false; ballRange.Visible = false; ballRay.Visible = false
             end
             ballLines[1].Text = string.format("Range   %.0f m", ballResult.distM)
             ballLines[2].Text = string.format("Flight  ~%.2f s", ballResult.flightT)
             ballLines[3].Text = string.format("Drop    ~%.1f m", ballResult.dropM)
             for i = 1, 3 do ballLines[i].Position = Vector2_new(px + 10, py + 27 + (i - 1) * 17); ballLines[i].Visible = true end
         else
-            ballMarker.Visible = false; ballDot.Visible = false; ballRange.Visible = false
+
+            ballDot.Visible = false; ballMarker.Visible = false; ballRange.Visible = false
+            local sT, visT = WTS(ballResult.tipPos or ballResult.originPos)
+            if visO and sO and visT and sT then
+                ballRay.From = Vector2_new(floor(sO.X + 0.5), floor(sO.Y + 0.5)); ballRay.To = Vector2_new(floor(sT.X + 0.5), floor(sT.Y + 0.5)); ballRay.Visible = true
+            else ballRay.Visible = false end
             ballLines[1].Text = "Range   (no target)"; ballLines[1].Position = Vector2_new(px + 10, py + 27); ballLines[1].Visible = true
             ballLines[2].Visible = false; ballLines[3].Visible = false
         end
     else
-        ballMarker.Visible = false; ballDot.Visible = false; ballRange.Visible = false
+        ballMarker.Visible = false; ballDot.Visible = false; ballRange.Visible = false; ballRay.Visible = false
         ballBg.Visible = false; ballTitle.Visible = false
         for i = 1, 3 do ballLines[i].Visible = false end
     end
@@ -1076,7 +1093,7 @@ _G.MTC = {
             pcall(function() staffLines[i]:Remove() end)
         end
         pcall(function() staffBg:Remove() end); pcall(function() staffTitle:Remove() end); pcall(function() staffPopup:Remove() end)
-        pcall(function() ballMarker:Remove() end); pcall(function() ballDot:Remove() end); pcall(function() ballBg:Remove() end)
+        pcall(function() ballRay:Remove() end); pcall(function() ballMarker:Remove() end); pcall(function() ballDot:Remove() end); pcall(function() ballBg:Remove() end)
         pcall(function() ballTitle:Remove() end); pcall(function() ballRange:Remove() end)
         for i = 1, 3 do pcall(function() ballLines[i]:Remove() end) end
         pcall(function() ovrBg:Remove() end); pcall(function() ovrTitle:Remove() end)
