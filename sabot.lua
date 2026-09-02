@@ -739,7 +739,7 @@ local conn = RS.RenderStepped:Connect(function(dt)
             for i = 1, 3 do ballLines[i].Position = Vector2_new(px + 10, py + 27 + (i - 1) * 17); ballLines[i].Visible = true end
         else
             ballMarker.Visible = false; ballDot.Visible = false; ballRange.Visible = false
-            ballLines[1].Text = "Range   -- (aim at target)"; ballLines[1].Position = Vector2_new(px + 10, py + 27); ballLines[1].Visible = true
+            ballLines[1].Text = "Range   (no target)"; ballLines[1].Position = Vector2_new(px + 10, py + 27); ballLines[1].Visible = true
             ballLines[2].Visible = false; ballLines[3].Visible = false
         end
     else
