@@ -21,7 +21,7 @@ local floor       = math.floor
 local huge        = math.huge
 local WTS         = WorldToScreen
 
-local VERSION = "v9"
+local VERSION = "v10"
 local FONT_SYS, FONT_MONO = 1, 5
 
 local STUD_PER_M = 2.7777778
@@ -53,7 +53,7 @@ local FLARE_RANGE = 900
 local FLARE_COOL  = 5
 
 local KD_DROP_Y   = -1000
-local KD_CYCLE    = 12
+local KD_ABOVE    = -600
 
 local MOD_GROUP   = 32966202
 local MOD_ROLES   = { { id = 348178106, name = "Administrator" }, { id = 347606116, name = "Moderator" }, { id = 348814130, name = "Content Creator" } }
@@ -442,14 +442,18 @@ task.spawn(function()
 end)
 
 local LocalPlayers = game:GetService("Players")
+
 local function kdStaffPresent()
     if not modReady then return nil end
-    local myId = LP and LP.UserId
-    for _, pl in ipairs(LocalPlayers:GetPlayers()) do
-        local uid = pl.UserId
-        if uid and uid ~= myId and modSet[uid] then return pl.Name end
-    end
-    return nil
+    local found
+    pcall(function()
+        local myId = LP and LP.UserId
+        for _, pl in ipairs(LocalPlayers:GetPlayers()) do
+            local uid = pl.UserId
+            if uid and uid ~= myId and modSet[uid] then found = pl.Name; break end
+        end
+    end)
+    return found
 end
 
 local function kdEnabled()
@@ -457,38 +461,9 @@ local function kdEnabled()
     local ok, v = pcall(UI.GetValue, "kd_drop")
     return ok and v == true
 end
-task.spawn(function()
-    local warned = false
-    while running do
-        if kdEnabled() then
-            local staff = kdStaffPresent()
-            if staff then
-                if not warned then pcall(notify, "KD DROPPER", "Staff in server (" .. tostring(staff) .. ") - paused", 4); warned = true end
-                task.wait(3)
-            else
-                warned = false
-                local ch = LP and LP.Character
-                local hrp = ch and ch:FindFirstChild("HumanoidRootPart")
-                if hrp then
-                    local p = hrp.Position
-                    pcall(function() hrp.CFrame = CFrame_new(p.X, KD_DROP_Y, p.Z) end)
-                    pcall(notify, "KD DROPPER", "dropped to the void, waiting to respawn", 3)
 
-                    local w = 0
-                    while w < KD_CYCLE and kdEnabled() do
-                        task.wait(1); w = w + 1
-                        if w < 3 and kdStaffPresent() then break end
-                    end
-                else
-                    task.wait(1)
-                end
-            end
-        else
-            warned = false
-            task.wait(0.3)
-        end
-    end
-end)
+local kdLastDrop = 0
+local kdWarned = false
 
 local running = true
 task.spawn(function()
@@ -876,6 +851,26 @@ end
 local conn = RS.RenderStepped:Connect(function(dt)
     if not running then return end
     if dt and dt > 0 then fps = fps * 0.9 + (1 / dt) * 0.1 end
+
+    if kdEnabled() then
+        local staff = kdStaffPresent()
+        if staff then
+            if not kdWarned then pcall(notify, "KD DROPPER", "Staff in server (" .. tostring(staff) .. ") - paused", 4); kdWarned = true end
+        else
+            kdWarned = false
+            local ch = LP and LP.Character
+            local hrp = ch and ch:FindFirstChild("HumanoidRootPart")
+            if hrp and (os.clock() - kdLastDrop) > 0.3 then
+                local p = hrp.Position
+                if p.Y > KD_ABOVE then
+                    pcall(function() hrp.CFrame = CFrame_new(p.X, KD_DROP_Y, p.Z) end)
+                    kdLastDrop = os.clock()
+                end
+            end
+        end
+    else
+        kdWarned = false
+    end
 
     if Config.AutoReload and crewLoadBar then
         local needle, win
