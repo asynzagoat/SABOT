@@ -21,7 +21,7 @@ local floor       = math.floor
 local huge        = math.huge
 local WTS         = WorldToScreen
 
-local VERSION = "v8"
+local VERSION = "v9"
 local FONT_SYS, FONT_MONO = 1, 5
 
 local STUD_PER_M = 2.7777778
@@ -52,8 +52,8 @@ local FLARE_VK    = 0x47
 local FLARE_RANGE = 900
 local FLARE_COOL  = 5
 
-local KD_DROP_Y   = -100
-local KD_CYCLE    = 27
+local KD_DROP_Y   = -1000
+local KD_CYCLE    = 12
 
 local MOD_GROUP   = 32966202
 local MOD_ROLES   = { { id = 348178106, name = "Administrator" }, { id = 347606116, name = "Moderator" }, { id = 348814130, name = "Content Creator" } }
