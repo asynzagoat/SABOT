@@ -21,7 +21,9 @@ local huge        = math.huge
 local WTS         = WorldToScreen
 
 local FONT_SYS, FONT_MONO = 1, 5
-local STUDS_TO_M = 0.28
+
+local STUD_PER_M = 2.7777778
+local STUDS_TO_M = 1 / STUD_PER_M
 local FADE_START = 450
 local FADE_END   = 3200
 local ABANDONED  = "Unoccupied/Abandoned"
@@ -44,6 +46,9 @@ local MSL_MOVE2   = 4
 local MSLPOOL     = 24
 
 local RELOAD_VK   = 0x45
+local FLARE_VK    = 0x47
+local FLARE_RANGE = 900
+local FLARE_COOL  = 5
 
 local MOD_GROUP   = 32966202
 local MOD_ROLES   = { { id = 348178106, name = "Administrator" }, { id = 347606116, name = "Moderator" }, { id = 348814130, name = "Content Creator" } }
@@ -52,7 +57,8 @@ local STAFFPOOL   = 12
 
 local COL_BALL    = Color3_rgb(120, 255, 180)
 
-local SHELL_VEL   = { APFSDS = 5350, APDS = 4600, APCR = 3600, HEATFS = 4000, HEAT = 3400, HESH = 2400, HE = 2400, AP = 2900, ATGM = 700, default = 3400 }
+local PROJ_GRAV   = 17.64
+local SHELL_VEL_DEFAULT = 1000
 
 local Config = {
     Enabled = true, Box = true, Names = true, Class = true, Distance = true, Overlay = false,
@@ -61,6 +67,7 @@ local Config = {
     ModOutline = false, ModFilled = false, ModEngine = true, ModAmmo = true, ModMaxDist = 400,
 
     HideGrain = false, Missile = false, AutoReload = false, ModChecker = false, Ballistic = false,
+    AutoFlare = false, ReloadStatus = false,
 }
 
 local BoxEdges = {
@@ -111,14 +118,14 @@ for i = 1, POOL do
         local l = Drawing.new("Line"); l.Thickness = 1; l.Color = COL_BOX; l.Visible = false
         s.lines[j] = l
     end
-    s.name = newText(); s.cls = newText(); s.dist = newText()
+    s.name = newText(); s.cls = newText(); s.dist = newText(); s.reload = newText()
     local mk = Drawing.new("Circle"); mk.Thickness = 1.5; mk.NumSides = 16; mk.Filled = false; mk.Color = COL_BOX; mk.Visible = false
     s.marker = mk
     slots[i] = s
 end
 local function hideSlot(s)
     for j = 1, 12 do s.lines[j].Visible = false end
-    s.name.Visible = false; s.cls.Visible = false; s.dist.Visible = false; s.marker.Visible = false
+    s.name.Visible = false; s.cls.Visible = false; s.dist.Visible = false; s.reload.Visible = false; s.marker.Visible = false
 end
 
 local modSlots = {}
@@ -157,16 +164,17 @@ end
 
 local ballRay = Drawing.new("Line")
 ballRay.Thickness = 1.5; ballRay.Color = COL_BALL; ballRay.Transparency = 1; ballRay.Visible = false
-local ballMarker = Drawing.new("Circle")
-ballMarker.Thickness = 2; ballMarker.NumSides = 18; ballMarker.Filled = false; ballMarker.Color = COL_BALL; ballMarker.Visible = false
-local ballDot = Drawing.new("Circle")
-ballDot.Thickness = 1; ballDot.NumSides = 18; ballDot.Filled = true; ballDot.Color = COL_BALL; ballDot.Visible = false
+
+local ballCrossH = Drawing.new("Line")
+ballCrossH.Thickness = 2; ballCrossH.Color = COL_BALL; ballCrossH.Transparency = 1; ballCrossH.Visible = false
+local ballCrossV = Drawing.new("Line")
+ballCrossV.Thickness = 2; ballCrossV.Color = COL_BALL; ballCrossV.Transparency = 1; ballCrossV.Visible = false
 local ballBg = Drawing.new("Square")
 ballBg.Filled = true; ballBg.Rounding = 0; ballBg.Color = Color3_rgb(8, 14, 11); ballBg.Transparency = 0.5; ballBg.Visible = false
 local ballTitle = Drawing.new("Text")
 ballTitle.Size = 14; ballTitle.Font = FONT_MONO; ballTitle.Outline = true; ballTitle.Color = COL_BALL; ballTitle.Visible = false
 local ballLines = {}
-for i = 1, 3 do
+for i = 1, 5 do
     local t = Drawing.new("Text"); t.Size = 13; t.Font = FONT_MONO; t.Outline = true; t.Color = COL_OVR; t.Visible = false
     ballLines[i] = t
 end
@@ -225,6 +233,27 @@ local function collectModules(veh)
     return out
 end
 
+local function ballCaliber(name)
+    local mm = name:match("(%d+%.?%d*)mm")
+    if mm then return tonumber(mm) end
+    local cal = name:match("(%d+%.?%d*)%s*[Cc]al")
+    if cal then return tonumber(cal) / 100 * 25.4 end
+    return 0
+end
+
+local function ballMainGun(veh)
+    local turrets = veh and veh:FindFirstChild("Turrets")
+    local t1 = turrets and turrets:FindFirstChild("Turret1")
+    local w = t1 and t1:FindFirstChild("Weapons")
+    if not w then return nil end
+    local best, bestCal
+    for _, g in ipairs(w:GetChildren()) do
+        local c = ballCaliber(g.Name)
+        if c >= 20 and (not bestCal or c > bestCal) then best = g; bestCal = c end
+    end
+    return best
+end
+
 local function buildVehicle(veh)
     local hull = veh:FindFirstChild("Hull")
     local mass = hull and hull:FindFirstChild("Mass")
@@ -235,6 +264,7 @@ local function buildVehicle(veh)
         anchor  = mass, name = veh.Name,
         kind    = veh:GetAttribute("Type"),
         class   = classAbbr(veh:GetAttribute("VehicleClass")),
+        gun     = ballMainGun(veh),
         teamColor = veh:GetAttribute("Team"),
         ownerVal = veh:FindFirstChild("Owner"),
         replen  = veh:FindFirstChild("Replenishable"),
@@ -369,6 +399,17 @@ local reloadArmed    = true
 local reloadNextFire = 0
 local reloadLastNX   = nil
 
+local flareArmed  = true
+local flareNextAt = 0
+local function tapFlare()
+    keypress(FLARE_VK); task.wait(0.05); pcall(keyrelease, FLARE_VK)
+end
+local function throwFlares()
+    tapFlare(); task.wait(0.12); tapFlare()
+    task.wait(1.6)
+    tapFlare(); task.wait(0.12); tapFlare()
+end
+
 local modSet = {}
 local modReady = false
 local modTargets = {}
@@ -481,8 +522,17 @@ end)
 
 task.spawn(function()
     while running do
-        if Config.Missile then
+        if Config.Missile or Config.AutoFlare then
             local mout, mseen = {}, {}
+
+            local myPos
+            if Config.AutoFlare then
+                local ch = LP and LP.Character
+                local hrp = ch and ch:FindFirstChild("HumanoidRootPart")
+                myPos = hrp and hrp.Position
+                if not myPos then local cc = Workspace.CurrentCamera; myPos = cc and cc.CFrame.Position end
+            end
+            local threatNear = false
             for _, cont in ipairs(mslContainers) do
                 for _, c in ipairs(cont:GetChildren()) do
                     local cn = c.ClassName
@@ -501,16 +551,25 @@ task.spawn(function()
                                 local vel = anchor.AssemblyLinearVelocity
                                 if vel and (vel.X * vel.X + vel.Y * vel.Y + vel.Z * vel.Z) > 100 then moving = true end
                                 local pv = mslPrev[a2]
+                                local mvx, mvy, mvz = 0, 0, 0
                                 if pv then
-                                    if not moving then
-                                        local dx, dy, dz = px - pv[1], py - pv[2], pz - pv[3]
-                                        if dx * dx + dy * dy + dz * dz > MSL_MOVE2 then moving = true end
-                                    end
+                                    mvx, mvy, mvz = px - pv[1], py - pv[2], pz - pv[3]
+                                    if not moving and (mvx * mvx + mvy * mvy + mvz * mvz) > MSL_MOVE2 then moving = true end
                                     pv[1], pv[2], pv[3] = px, py, pz
                                 else
                                     mslPrev[a2] = { px, py, pz }
                                 end
-                                if moving then mout[#mout + 1] = { anchor = anchor, label = cat.label, threat = cat.threat } end
+                                if moving then
+                                    mout[#mout + 1] = { anchor = anchor, label = cat.label, threat = cat.threat }
+
+                                    if Config.AutoFlare and cat.threat and cat.label == "AA" and myPos and pv then
+                                        local tmx, tmy, tmz = myPos.X - px, myPos.Y - py, myPos.Z - pz
+                                        if (tmx * tmx + tmy * tmy + tmz * tmz) < (FLARE_RANGE * FLARE_RANGE)
+                                           and (mvx * tmx + mvy * tmy + mvz * tmz) > 0 then
+                                            threatNear = true
+                                        end
+                                    end
+                                end
                             end
                         end
                     end
@@ -518,6 +577,17 @@ task.spawn(function()
             end
             for a2 in pairs(mslPrev) do if not mseen[a2] then mslPrev[a2] = nil end end
             mslTargets = mout
+
+            if Config.AutoFlare then
+                if threatNear and flareArmed and os.clock() >= flareNextAt then
+                    flareArmed = false
+                    flareNextAt = os.clock() + FLARE_COOL
+                    pcall(notify, "THREAT", "SAM inbound, deploying flares", 3)
+                    task.spawn(throwFlares)
+                elseif not threatNear then
+                    flareArmed = true
+                end
+            end
         elseif #mslTargets > 0 then
             mslTargets = {}
             for k in pairs(mslPrev) do mslPrev[k] = nil end
@@ -547,35 +617,72 @@ local function ballOwnVehicle()
     return (r and ballVehOf(r.Instance)) or nil, ch
 end
 
-local function ballBarrel(veh)
-    local mf = veh and veh:FindFirstChild("Muzzles")
-    if not mf then return nil end
-    local best
-    for _, m in ipairs(mf:GetChildren()) do
-        if m.Name == "Muzzle" and m.CFrame then
-            if not best or m.Position.Y > best.Position.Y then best = m end
+local function ballBarrel(gun)
+    local mo = gun and gun:FindFirstChild("Muzzle")
+    if mo and mo.Value and mo.Value.CFrame then return mo.Value end
+    local cm = gun and gun:FindFirstChild("CurrentMuzzle")
+    local inner = cm and cm.Value and cm.Value:FindFirstChild("Muzzle")
+    if inner and inner.Value then return inner.Value end
+    return nil
+end
+
+local function ballHullCenter(veh)
+    local sx, sy, sz, n = 0, 0, 0, 0
+    for _, d in ipairs(veh:GetDescendants()) do
+        local cn = d.ClassName
+        if cn == "Part" or cn == "MeshPart" then
+            local p = d.Position; sx = sx + p.X; sy = sy + p.Y; sz = sz + p.Z; n = n + 1
         end
     end
-    return best
+    if n == 0 then return nil end
+    return Vector3_new(sx / n, sy / n, sz / n)
+end
+
+local ballShellMap = {}
+local function ballBuildShellMap()
+    local map = {}
+    local pg = LP and LP:FindFirstChild("PlayerGui")
+    local cg = pg and pg:FindFirstChild("CrewGui")
+    if not cg then return map end
+    for _, d in ipairs(cg:GetDescendants()) do
+        if d.Name == "AmmoName" and d.ClassName == "TextLabel" and d.Text and d.Text ~= "" then
+            local entry = d.Parent
+            local dt = entry and entry:FindFirstChild("DataTable")
+            local velL = dt and dt:FindFirstChild("Velocity")
+            if velL then
+                local v = tonumber((velL.Text or ""):match("(%d+)"))
+                if v then
+                    local typeL = entry:FindFirstChild("AmmoType")
+                    map[d.Text] = { vel = v, typ = (typeL and typeL.Text) or "" }
+                end
+            end
+        end
+    end
+    return map
 end
 task.spawn(function()
-    local GRAV = Workspace.Gravity or 196.2
+    local ballVehA, ballSign = nil, 1
+    local mapClock = 0
     while running do
         if Config.Ballistic then
             local pg = LP and LP:FindFirstChild("PlayerGui")
             local crewing = pg and pg:FindFirstChild("CrewGui")
             local veh, ch = nil, nil
             if crewing then veh, ch = ballOwnVehicle() end
-            local barrel = veh and ballBarrel(veh)
+            local gun = veh and ballMainGun(veh)
+            local barrel = gun and ballBarrel(gun)
             local bcf = barrel and barrel.CFrame
             if bcf then
+                if os.clock() - mapClock > 1.5 then ballShellMap = ballBuildShellMap(); mapClock = os.clock() end
                 local o = bcf.Position
                 local dir = bcf.LookVector
-
-                local cc = Workspace.CurrentCamera
-                local camLook = cc and cc.CFrame.LookVector
-                if camLook and dir:Dot(camLook) < 0 then dir = -dir end
                 local vehA = veh.Address
+                if vehA ~= ballVehA then
+                    local center = ballHullCenter(veh)
+                    ballSign = (center and dir:Dot(o - center) < 0) and -1 or 1
+                    ballVehA = vehA
+                end
+                dir = dir * ballSign
                 local prm = RaycastParams.new(); prm.FilterType = Enum.RaycastFilterType.Exclude
                 prm.FilterDescendantsInstances = { ch, veh }
                 local origin, hit = o, nil
@@ -584,17 +691,24 @@ task.spawn(function()
                     if not r then break end
                     local hv = ballVehOf(r.Instance)
                     local ownHit = (hv and hv.Address == vehA) or (ch and r.Instance:IsDescendantOf(ch))
-                    if ownHit then origin = r.Position + dir * 2 else hit = r; break end
+                    if ownHit then origin = r.Position + dir * 3 else hit = r; break end
                 end
                 if hit then
                     local studs = (hit.Position - o).Magnitude
-                    local flightT = studs / SHELL_VEL.default
+                    local loaded = gun:FindFirstChild("CurrentlyLoaded")
+                    local sname = loaded and loaded.Value
+                    local sd = sname and ballShellMap[sname]
+                    local vel = (sd and sd.vel) or SHELL_VEL_DEFAULT
+                    local flightT = studs / (vel * STUD_PER_M)
                     ballResult = {
                         distM   = studs * STUDS_TO_M,
                         hitPos  = hit.Position,
                         originPos = o,
+                        shell   = sname,
+                        shType  = sd and sd.typ,
+                        vel     = vel,
                         flightT = flightT,
-                        dropM   = (0.5 * GRAV * flightT * flightT) * STUDS_TO_M,
+                        dropM   = (0.5 * PROJ_GRAV * flightT * flightT) * STUDS_TO_M,
                     }
                 else
                     ballResult = { distM = nil, originPos = o, tipPos = o + dir * 300 }
@@ -605,7 +719,7 @@ task.spawn(function()
         elseif ballResult then
             ballResult = nil
         end
-        task.wait(0.08)
+        task.wait(0.06)
     end
 end)
 
@@ -726,8 +840,8 @@ local conn = RS.RenderStepped:Connect(function(dt)
         local bcam = Workspace.CurrentCamera
         local bvp = bcam and bcam.ViewportSize
         local vpy = (bvp and bvp.Y) or 1080
-        local px, py = 12, vpy - 96
-        ballBg.Position = Vector2_new(px, py); ballBg.Size = Vector2_new(170, 82); ballBg.Visible = true
+        local px, py = 12, vpy - 138
+        ballBg.Position = Vector2_new(px, py); ballBg.Size = Vector2_new(184, 122); ballBg.Visible = true
         ballTitle.Text = "BALLISTIC"; ballTitle.Position = Vector2_new(px + 10, py + 6); ballTitle.Visible = true
 
         local sO, visO = WTS(ballResult.originPos)
@@ -735,34 +849,39 @@ local conn = RS.RenderStepped:Connect(function(dt)
             local sH, visH = WTS(ballResult.hitPos)
             if visH and sH then
                 local x, y = floor(sH.X + 0.5), floor(sH.Y + 0.5)
-                ballDot.Position = Vector2_new(x, y); ballDot.Radius = 5; ballDot.Visible = true
-                ballMarker.Position = Vector2_new(x, y); ballMarker.Radius = 9; ballMarker.Visible = true
+                local h = 7
+                ballCrossH.From = Vector2_new(x - h, y); ballCrossH.To = Vector2_new(x + h, y); ballCrossH.Visible = true
+                ballCrossV.From = Vector2_new(x, y - h); ballCrossV.To = Vector2_new(x, y + h); ballCrossV.Visible = true
                 ballRange.Text = string.format("%.0f m", ballResult.distM)
-                ballRange.Position = Vector2_new(x, y + 16); ballRange.Visible = true
+                ballRange.Position = Vector2_new(x, y + 12); ballRange.Visible = true
                 if visO and sO then
                     ballRay.From = Vector2_new(floor(sO.X + 0.5), floor(sO.Y + 0.5)); ballRay.To = Vector2_new(x, y); ballRay.Visible = true
                 else ballRay.Visible = false end
             else
-                ballDot.Visible = false; ballMarker.Visible = false; ballRange.Visible = false; ballRay.Visible = false
+                ballCrossH.Visible = false; ballCrossV.Visible = false; ballRange.Visible = false; ballRay.Visible = false
             end
+            local shell = ballResult.shell or "?"
+            if ballResult.shType and ballResult.shType ~= "" then shell = shell .. " (" .. ballResult.shType .. ")" end
             ballLines[1].Text = string.format("Range   %.0f m", ballResult.distM)
-            ballLines[2].Text = string.format("Flight  ~%.2f s", ballResult.flightT)
-            ballLines[3].Text = string.format("Drop    ~%.1f m", ballResult.dropM)
-            for i = 1, 3 do ballLines[i].Position = Vector2_new(px + 10, py + 27 + (i - 1) * 17); ballLines[i].Visible = true end
+            ballLines[2].Text = "Shell   " .. shell
+            ballLines[3].Text = string.format("Vel     %d m/s", ballResult.vel or 0)
+            ballLines[4].Text = string.format("Flight  ~%.2f s", ballResult.flightT)
+            ballLines[5].Text = string.format("Drop    ~%.2f m", ballResult.dropM)
+            for i = 1, 5 do ballLines[i].Position = Vector2_new(px + 10, py + 27 + (i - 1) * 17); ballLines[i].Visible = true end
         else
 
-            ballDot.Visible = false; ballMarker.Visible = false; ballRange.Visible = false
+            ballCrossH.Visible = false; ballCrossV.Visible = false; ballRange.Visible = false
             local sT, visT = WTS(ballResult.tipPos or ballResult.originPos)
             if visO and sO and visT and sT then
                 ballRay.From = Vector2_new(floor(sO.X + 0.5), floor(sO.Y + 0.5)); ballRay.To = Vector2_new(floor(sT.X + 0.5), floor(sT.Y + 0.5)); ballRay.Visible = true
             else ballRay.Visible = false end
             ballLines[1].Text = "Range   (no target)"; ballLines[1].Position = Vector2_new(px + 10, py + 27); ballLines[1].Visible = true
-            ballLines[2].Visible = false; ballLines[3].Visible = false
+            for i = 2, 5 do ballLines[i].Visible = false end
         end
     else
-        ballMarker.Visible = false; ballDot.Visible = false; ballRange.Visible = false; ballRay.Visible = false
+        ballCrossH.Visible = false; ballCrossV.Visible = false; ballRange.Visible = false; ballRay.Visible = false
         ballBg.Visible = false; ballTitle.Visible = false
-        for i = 1, 3 do ballLines[i].Visible = false end
+        for i = 1, 5 do ballLines[i].Visible = false end
     end
 
     if not Config.Enabled then
@@ -886,8 +1005,17 @@ local conn = RS.RenderStepped:Connect(function(dt)
                             else s.name.Visible = false end
                             if showClass and t.class then
                                 s.cls.Size = fsize; s.cls.Text = t.class; s.cls.Color = classCol
-                                s.cls.Transparency = alpha * classA; s.cls.Position = Vector2_new(cx, yy); s.cls.Visible = true
+                                s.cls.Transparency = alpha * classA; s.cls.Position = Vector2_new(cx, yy); s.cls.Visible = true; yy = yy - step
                             else s.cls.Visible = false end
+
+                            if Config.ReloadStatus and t.gun then
+                                local rl = t.gun:GetAttribute("reloading")
+                                local reloading = (rl == true) or (type(rl) == "string" and rl ~= "" and rl:lower() ~= "false")
+                                s.reload.Size = fsize
+                                s.reload.Text = reloading and "RELOADING" or "READY"
+                                s.reload.Color = reloading and COL_AMMO or COL_ACC
+                                s.reload.Transparency = alpha; s.reload.Position = Vector2_new(cx, yy); s.reload.Visible = true
+                            else s.reload.Visible = false end
 
                             if modOn and dm and dm <= modMax then
                                 local mods = t.mods
@@ -1039,6 +1167,7 @@ local uiOk, uiErr = pcall(function()
         try(function() sec:ColorPicker("mtc_class_col", 255, 180, 80, 255, NOOP) end)
         try(function() sec:Toggle("mtc_dist", "Distance", Config.Distance, function(v) Config.Distance = v end) end)
         try(function() sec:ColorPicker("mtc_dist_col", 140, 220, 255, 255, NOOP) end)
+        try(function() sec:Toggle("mtc_reload", "Reload Status", Config.ReloadStatus, function(v) Config.ReloadStatus = v end) end)
         try(function() sec:Toggle("mtc_fade", "Distance Fade", Config.Fade, function(v) Config.Fade = v end) end)
         try(function() sec:Toggle("mtc_heli", "Helicopter ESP", Config.Heli, function(v) Config.Heli = v end) end)
         try(function() sec:Toggle("mtc_occ", "Occupied Only", Config.OccupiedOnly, function(v) Config.OccupiedOnly = v end) end)
@@ -1066,6 +1195,7 @@ local uiOk, uiErr = pcall(function()
         try(function() xsec:Toggle("misc_autoreload", "Auto Fast Reload", Config.AutoReload, function(v) Config.AutoReload = v end) end)
         try(function() xsec:Toggle("misc_modcheck", "Mod Checker", Config.ModChecker, function(v) Config.ModChecker = v end) end)
         try(function() xsec:Toggle("misc_ballistic", "Ballistic Calc", Config.Ballistic, function(v) Config.Ballistic = v end) end)
+        try(function() xsec:Toggle("misc_autoflare", "Auto Flare", Config.AutoFlare, function(v) Config.AutoFlare = v end) end)
     end)
 end)
 if not uiOk then pcall(notify, "MTC", "UI failed: " .. tostring(uiErr), 8) end
@@ -1078,7 +1208,7 @@ _G.MTC = {
         for i = 1, POOL do
             local s = slots[i]
             for j = 1, 12 do pcall(function() s.lines[j]:Remove() end) end
-            pcall(function() s.name:Remove() end); pcall(function() s.cls:Remove() end); pcall(function() s.dist:Remove() end)
+            pcall(function() s.name:Remove() end); pcall(function() s.cls:Remove() end); pcall(function() s.dist:Remove() end); pcall(function() s.reload:Remove() end)
             pcall(function() s.marker:Remove() end)
         end
         for i = 1, MODPOOL do
@@ -1093,9 +1223,9 @@ _G.MTC = {
             pcall(function() staffLines[i]:Remove() end)
         end
         pcall(function() staffBg:Remove() end); pcall(function() staffTitle:Remove() end); pcall(function() staffPopup:Remove() end)
-        pcall(function() ballRay:Remove() end); pcall(function() ballMarker:Remove() end); pcall(function() ballDot:Remove() end); pcall(function() ballBg:Remove() end)
+        pcall(function() ballRay:Remove() end); pcall(function() ballCrossH:Remove() end); pcall(function() ballCrossV:Remove() end); pcall(function() ballBg:Remove() end)
         pcall(function() ballTitle:Remove() end); pcall(function() ballRange:Remove() end)
-        for i = 1, 3 do pcall(function() ballLines[i]:Remove() end) end
+        for i = 1, 5 do pcall(function() ballLines[i]:Remove() end) end
         pcall(function() ovrBg:Remove() end); pcall(function() ovrTitle:Remove() end)
         for i = 1, 5 do pcall(function() ovrLines[i]:Remove() end) end
         pcall(function() UI.RemoveTab("MTC") end)
