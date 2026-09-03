@@ -264,11 +264,13 @@ local function buildVehicle(veh)
     if not mass then return nil end
     local corners = partCorners(mass)
     if not corners then return nil end
+    local gun = ballMainGun(veh)
     return {
         anchor  = mass, name = veh.Name,
         kind    = veh:GetAttribute("Type"),
         class   = classAbbr(veh:GetAttribute("VehicleClass")),
-        gun     = ballMainGun(veh),
+        gun     = gun,
+        loaded  = gun and gun:FindFirstChild("CurrentlyLoaded"),
         teamColor = veh:GetAttribute("Team"),
         ownerVal = veh:FindFirstChild("Owner"),
         replen  = veh:FindFirstChild("Replenishable"),
@@ -438,21 +440,30 @@ task.spawn(function()
     modReady = true
 end)
 
-local function kdModInServer()
-    if not modReady then return "(loading)" end
-    for _, pl in ipairs(game:GetService("Players"):GetPlayers()) do
-        if pl ~= LP and pl.UserId and modSet[pl.UserId] then return pl.Name end
+local LocalPlayers = game:GetService("Players")
+local function kdStaffPresent()
+    if not modReady then return nil end
+    local myId = LP and LP.UserId
+    for _, pl in ipairs(LocalPlayers:GetPlayers()) do
+        local uid = pl.UserId
+        if uid and uid ~= myId and modSet[uid] then return pl.Name end
     end
     return nil
+end
+
+local function kdEnabled()
+    if Config.KDDrop then return true end
+    local ok, v = pcall(UI.GetValue, "kd_drop")
+    return ok and v == true
 end
 task.spawn(function()
     local warned = false
     while running do
-        if Config.KDDrop then
-            local mod = kdModInServer()
-            if mod then
-                if not warned then pcall(notify, "KD DROPPER", "Staff in server (" .. tostring(mod) .. ") - paused for safety", 4); warned = true end
-                local w = 0; while w < 4 and Config.KDDrop do task.wait(1); w = w + 1 end
+        if kdEnabled() then
+            local staff = kdStaffPresent()
+            if staff then
+                if not warned then pcall(notify, "KD DROPPER", "Staff in server (" .. tostring(staff) .. ") - paused", 4); warned = true end
+                task.wait(3)
             else
                 warned = false
                 local ch = LP and LP.Character
@@ -462,9 +473,9 @@ task.spawn(function()
                     pcall(function() hrp.CFrame = CFrame_new(p.X, KD_DROP_Y, p.Z) end)
 
                     local w = 0
-                    while w < KD_CYCLE and Config.KDDrop do
+                    while w < KD_CYCLE and kdEnabled() do
                         task.wait(1); w = w + 1
-                        if w < 3 and kdModInServer() then break end
+                        if w < 3 and kdStaffPresent() then break end
                     end
                 else
                     task.wait(1)
@@ -730,7 +741,9 @@ task.spawn(function()
             if crewing then veh, ch = ballOwnVehicle() end
             local gun = veh and ballMainGun(veh)
 
-            local part = (veh and ballOptic(veh)) or (gun and ballBarrel(gun))
+            local barrel = gun and ballBarrel(gun)
+            local optic  = veh and ballOptic(veh)
+            local part   = barrel or optic
             local pcf = part and part.CFrame
             if pcf then
                 if os.clock() - mapClock > 1.5 then ballShellMap = ballBuildShellMap(); mapClock = os.clock() end
@@ -744,6 +757,7 @@ task.spawn(function()
                     ballVehA = vehA
                 end
                 dir = dir * ballSign
+                local refPos = (optic and optic.CFrame and optic.CFrame.Position) or o
                 local prm = RaycastParams.new(); prm.FilterType = Enum.RaycastFilterType.Exclude
                 prm.FilterDescendantsInstances = { ch, veh }
                 local origin, hit = o, nil
@@ -755,8 +769,8 @@ task.spawn(function()
                     if ownHit then origin = r.Position + dir * 3 else hit = r; break end
                 end
                 if hit then
-                    local studs = (hit.Position - o).Magnitude
-                    local loaded = gun:FindFirstChild("CurrentlyLoaded")
+                    local studs = (hit.Position - refPos).Magnitude
+                    local loaded = gun and gun:FindFirstChild("CurrentlyLoaded")
                     local sname = loaded and loaded.Value
                     local sd = sname and ballShellMap[sname]
                     local vel = (sd and sd.vel) or SHELL_VEL_DEFAULT
@@ -1081,8 +1095,7 @@ local conn = RS.RenderStepped:Connect(function(dt)
                             if Config.ReloadStatus and t.gun then
                                 local rl = t.gun:GetAttribute("reloading")
                                 local reloading = (rl == true) or (type(rl) == "string" and rl ~= "" and rl:lower() ~= "false")
-                                local clv = t.gun:FindFirstChild("CurrentlyLoaded")
-                                local loadedName = clv and clv.Value
+                                local loadedName = t.loaded and t.loaded.Value
                                 local chambered = loadedName ~= nil and loadedName ~= "" and loadedName ~= "Unloaded"
                                 local txt, col
                                 if reloading then txt, col = "RELOADING", COL_CLASS
