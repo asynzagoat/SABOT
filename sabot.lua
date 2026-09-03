@@ -14,6 +14,7 @@ local myTeamColor = nil
 
 local Vector2_new = Vector2.new
 local Vector3_new = Vector3.new
+local CFrame_new  = CFrame.new
 local Color3_rgb  = Color3.fromRGB
 local Color3_new  = Color3.new
 local floor       = math.floor
@@ -50,6 +51,9 @@ local FLARE_VK    = 0x47
 local FLARE_RANGE = 900
 local FLARE_COOL  = 5
 
+local KD_DROP_Y   = -100
+local KD_CYCLE    = 27
+
 local MOD_GROUP   = 32966202
 local MOD_ROLES   = { { id = 348178106, name = "Administrator" }, { id = 347606116, name = "Moderator" }, { id = 348814130, name = "Content Creator" } }
 local COL_STAFF   = Color3_rgb(255, 30, 60)
@@ -67,7 +71,7 @@ local Config = {
     ModOutline = false, ModFilled = false, ModEngine = true, ModAmmo = true, ModMaxDist = 400,
 
     HideGrain = false, Missile = false, AutoReload = false, ModChecker = false, Ballistic = false,
-    AutoFlare = false, ReloadStatus = false,
+    AutoFlare = false, ReloadStatus = false, KDDrop = false,
 }
 
 local BoxEdges = {
@@ -434,6 +438,45 @@ task.spawn(function()
     modReady = true
 end)
 
+local function kdModInServer()
+    if not modReady then return "(loading)" end
+    for _, pl in ipairs(game:GetService("Players"):GetPlayers()) do
+        if pl ~= LP and pl.UserId and modSet[pl.UserId] then return pl.Name end
+    end
+    return nil
+end
+task.spawn(function()
+    local warned = false
+    while running do
+        if Config.KDDrop then
+            local mod = kdModInServer()
+            if mod then
+                if not warned then pcall(notify, "KD DROPPER", "Staff in server (" .. tostring(mod) .. ") - paused for safety", 4); warned = true end
+                local w = 0; while w < 4 and Config.KDDrop do task.wait(1); w = w + 1 end
+            else
+                warned = false
+                local ch = LP and LP.Character
+                local hrp = ch and ch:FindFirstChild("HumanoidRootPart")
+                if hrp then
+                    local p = hrp.Position
+                    pcall(function() hrp.CFrame = CFrame_new(p.X, KD_DROP_Y, p.Z) end)
+
+                    local w = 0
+                    while w < KD_CYCLE and Config.KDDrop do
+                        task.wait(1); w = w + 1
+                        if w < 3 and kdModInServer() then break end
+                    end
+                else
+                    task.wait(1)
+                end
+            end
+        else
+            warned = false
+            task.wait(0.3)
+        end
+    end
+end)
+
 local running = true
 task.spawn(function()
     while running do
@@ -626,6 +669,22 @@ local function ballBarrel(gun)
     return nil
 end
 
+local function ballOptic(veh)
+    local turrets = veh and veh:FindFirstChild("Turrets")
+    local t1 = turrets and turrets:FindFirstChild("Turret1")
+    local cams = t1 and t1:FindFirstChild("Cameras")
+    if not cams then return nil end
+    for _, nm in ipairs({ "MainSight", "TelescopeSight", "PeriscopeSight", "GunnerSight" }) do
+        local o = cams:FindFirstChild(nm)
+        if o and o.Value and o.Value.CFrame then return o.Value end
+    end
+    for _, o in ipairs(cams:GetChildren()) do
+        local ln = o.Name:lower()
+        if o.Value and o.Value.CFrame and not ln:find("backup") and not ln:find("mg") then return o.Value end
+    end
+    return nil
+end
+
 local function ballHullCenter(veh)
     local sx, sy, sz, n = 0, 0, 0, 0
     for _, d in ipairs(veh:GetDescendants()) do
@@ -670,12 +729,14 @@ task.spawn(function()
             local veh, ch = nil, nil
             if crewing then veh, ch = ballOwnVehicle() end
             local gun = veh and ballMainGun(veh)
-            local barrel = gun and ballBarrel(gun)
-            local bcf = barrel and barrel.CFrame
-            if bcf then
+
+            local part = (veh and ballOptic(veh)) or (gun and ballBarrel(gun))
+            local pcf = part and part.CFrame
+            if pcf then
                 if os.clock() - mapClock > 1.5 then ballShellMap = ballBuildShellMap(); mapClock = os.clock() end
-                local o = bcf.Position
-                local dir = bcf.LookVector
+                local o = pcf.Position
+                local dir = pcf.LookVector
+
                 local vehA = veh.Address
                 if vehA ~= ballVehA then
                     local center = ballHullCenter(veh)
@@ -837,6 +898,15 @@ local conn = RS.RenderStepped:Connect(function(dt)
     for i = 1, 5 do ovrLines[i].Visible = Config.Overlay end
 
     if Config.Ballistic and ballResult then
+
+        local ballCol, ballA = readCP("misc_ball_col", COL_BALL, 1)
+        ballRay.Color = ballCol; ballRay.Transparency = ballA
+        ballCrossH.Color = ballCol; ballCrossH.Transparency = ballA
+        ballCrossV.Color = ballCol; ballCrossV.Transparency = ballA
+        ballRange.Color = ballCol; ballRange.Transparency = ballA
+        ballTitle.Color = ballCol; ballTitle.Transparency = ballA
+        ballBg.Transparency = 0.5 * ballA
+        for i = 1, 5 do ballLines[i].Transparency = ballA end
         local bcam = Workspace.CurrentCamera
         local bvp = bcam and bcam.ViewportSize
         local vpy = (bvp and bvp.Y) or 1080
@@ -1011,9 +1081,15 @@ local conn = RS.RenderStepped:Connect(function(dt)
                             if Config.ReloadStatus and t.gun then
                                 local rl = t.gun:GetAttribute("reloading")
                                 local reloading = (rl == true) or (type(rl) == "string" and rl ~= "" and rl:lower() ~= "false")
+                                local clv = t.gun:FindFirstChild("CurrentlyLoaded")
+                                local loadedName = clv and clv.Value
+                                local chambered = loadedName ~= nil and loadedName ~= "" and loadedName ~= "Unloaded"
+                                local txt, col
+                                if reloading then txt, col = "RELOADING", COL_CLASS
+                                elseif chambered then txt, col = "READY", COL_ACC
+                                else txt, col = "EMPTY", COL_AMMO end
                                 s.reload.Size = fsize
-                                s.reload.Text = reloading and "RELOADING" or "READY"
-                                s.reload.Color = reloading and COL_AMMO or COL_ACC
+                                s.reload.Text = txt; s.reload.Color = col
                                 s.reload.Transparency = alpha; s.reload.Position = Vector2_new(cx, yy); s.reload.Visible = true
                             else s.reload.Visible = false end
 
@@ -1195,7 +1271,11 @@ local uiOk, uiErr = pcall(function()
         try(function() xsec:Toggle("misc_autoreload", "Auto Fast Reload", Config.AutoReload, function(v) Config.AutoReload = v end) end)
         try(function() xsec:Toggle("misc_modcheck", "Mod Checker", Config.ModChecker, function(v) Config.ModChecker = v end) end)
         try(function() xsec:Toggle("misc_ballistic", "Ballistic Calc", Config.Ballistic, function(v) Config.Ballistic = v end) end)
+        try(function() xsec:ColorPicker("misc_ball_col", 120, 255, 180, 255, NOOP) end)
         try(function() xsec:Toggle("misc_autoflare", "Auto Flare", Config.AutoFlare, function(v) Config.AutoFlare = v end) end)
+
+        local ksec = tab:Section("KD Dropper", "Right")
+        try(function() ksec:Toggle("kd_drop", "KD Dropper", Config.KDDrop, function(v) Config.KDDrop = v end) end)
     end)
 end)
 if not uiOk then pcall(notify, "MTC", "UI failed: " .. tostring(uiErr), 8) end
