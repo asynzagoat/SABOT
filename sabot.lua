@@ -21,6 +21,7 @@ local floor       = math.floor
 local huge        = math.huge
 local WTS         = WorldToScreen
 
+local VERSION = "v8"
 local FONT_SYS, FONT_MONO = 1, 5
 
 local STUD_PER_M = 2.7777778
@@ -471,6 +472,7 @@ task.spawn(function()
                 if hrp then
                     local p = hrp.Position
                     pcall(function() hrp.CFrame = CFrame_new(p.X, KD_DROP_Y, p.Z) end)
+                    pcall(notify, "KD DROPPER", "dropped to the void, waiting to respawn", 3)
 
                     local w = 0
                     while w < KD_CYCLE and kdEnabled() do
@@ -933,7 +935,7 @@ local conn = RS.RenderStepped:Connect(function(dt)
             local sH, visH = WTS(ballResult.hitPos)
             if visH and sH then
                 local x, y = floor(sH.X + 0.5), floor(sH.Y + 0.5)
-                local h = 7
+                local h = 11
                 ballCrossH.From = Vector2_new(x - h, y); ballCrossH.To = Vector2_new(x + h, y); ballCrossH.Visible = true
                 ballCrossV.From = Vector2_new(x, y - h); ballCrossV.To = Vector2_new(x, y + h); ballCrossV.Visible = true
                 ballRange.Text = string.format("%.0f m", ballResult.distM)
@@ -1325,5 +1327,5 @@ _G.MTC = {
     end,
 }
 
-pcall(notify, "MTC", "Vehicle ESP + Module ESP loaded", 4)
-print("[MTC] loaded, uiOk=", uiOk)
+pcall(notify, "SABOT " .. VERSION, "loaded - Ballistic / Reload / Auto Flare / KD Dropper", 5)
+print("[MTC] loaded " .. VERSION .. ", uiOk=", uiOk)
